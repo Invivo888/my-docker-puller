@@ -1,4 +1,4 @@
-name: Docker Image Downloader (Release Version)
+name: Docker Image Downloader (Split Version)
 
 on:
   workflow_dispatch:
@@ -11,7 +11,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 给 Action 写入 Release 的权限
     permissions:
       contents: write
     steps:
@@ -20,26 +19,33 @@ jobs:
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
       - name: Pull Docker Image
         run: |
           docker pull ${{ github.event.inputs.image_name }}
 
-      - name: Save and Compress Image
+      - name: Save, Compress and Split
         run: |
-          # 生成文件名
           CLEAN_NAME=$(echo "${{ github.event.inputs.image_name }}" | sed 's/[:\/]/_/g')
-          IMAGE_FILE="${CLEAN_NAME}.tar.gz"
-          echo "Saving to $IMAGE_FILE ..."
-          docker save ${{ github.event.inputs.image_name }} | gzip > $IMAGE_FILE
-          echo "FILE_NAME=$IMAGE_FILE" >> $GITHUB_ENV
+          # 1. 保存并压缩
+          docker save ${{ github.event.inputs.image_name }} | gzip > full_image.tar.gz
+          
+          # 2. 切分成每份 2000MB 的小块 (避免触发 2GB 限制)
+          # 文件名会变成：vllm_vllm-openai_latest.tar.gz.part-aa, ...ab, ...ac
+          split -b 2000M full_image.tar.gz "${CLEAN_NAME}.tar.gz.part-"
+          
+          # 3. 删除超大原文件，腾出空间给上传步骤
+          rm full_image.tar.gz
+          
           echo "TAG_NAME=v$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
 
-      - name: Create Release and Upload Asset
+      - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG_NAME }}
           name: Docker Image Release ${{ env.TAG_NAME }}
-          files: ${{ env.FILE_NAME }}
+          files: "*.part-*"  # 上传所有切片文件
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
