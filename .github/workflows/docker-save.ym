@@ -1,0 +1,42 @@
+name: Docker Image Downloader
+
+# 触发条件：手动触发
+on:
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: '输入完整的 Docker 镜像名称 (例如: vllm/vllm-openai:latest)'
+        required: true
+        default: 'vllm/vllm-openai:latest'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free up disk space
+        # vLLM 镜像很大，清理一下 GitHub Runner 的磁盘空间防止溢出
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+
+      - name: Pull Docker Image
+        run: |
+          docker pull ${{ github.event.inputs.image_name }}
+
+      - name: Save and Compress Image
+        run: |
+          # 获取镜像名并处理成合法的文件名
+          IMAGE_FILE=$(echo "${{ github.event.inputs.image_name }}" | sed 's/[:\/]/_/g').tar.gz
+          echo "Saving to $IMAGE_FILE ..."
+          # 使用 gzip 压缩，大大减小传输体积
+          docker save ${{ github.event.inputs.image_name }} | gzip > $IMAGE_FILE
+          echo "IMAGE_FILE_NAME=$IMAGE_FILE" >> $GITHUB_ENV
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.IMAGE_FILE_NAME }}
+          path: ${{ env.IMAGE_FILE_NAME }}
+          # 附件保留 1 天即可，下载完就会自动过期
+          retention-days: 1
